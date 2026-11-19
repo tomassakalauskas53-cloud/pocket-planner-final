@@ -5,7 +5,6 @@ export const categories = {
   edu: 'Edukacija',
 }
 
-const storageKey = 'pocketPlannerReact'
 const currency = new Intl.NumberFormat('lt-LT', { style: 'currency', currency: 'EUR' })
 const calendar = new Intl.DateTimeFormat('lt-LT', { year: 'numeric', month: 'long' })
 
@@ -25,39 +24,3 @@ function monthDate(key, offset = 0) {
 
 export const shiftMonth = (key, offset) => monthKey(monthDate(key, offset))
 export const monthLabel = (key) => calendar.format(monthDate(key))
-
-function importExpense(expense) {
-  return { ...expense, amount: cents(expense.amount) }
-}
-
-export function loadPlanner() {
-  try {
-    const saved = localStorage.getItem(storageKey)
-    if (saved) return JSON.parse(saved)
-
-    const original = JSON.parse(localStorage.getItem('pocketPlannerV1'))
-    if (original) {
-      const months = Object.fromEntries(Object.entries(original.months).map(([key, month]) => [
-        key,
-        {
-          income: cents(month.income),
-          allocations: {},
-          future: (month.future || []).map(importExpense),
-        },
-      ]))
-      return { months, recurring: original.recurring.map(importExpense) }
-    }
-  } catch {
-    // The planner can start with empty data if storage is unavailable.
-  }
-  return { months: {}, recurring: [] }
-}
-
-export function storePlanner(planner) {
-  try {
-    localStorage.setItem(storageKey, JSON.stringify(planner))
-    return true
-  } catch {
-    return false
-  }
-}

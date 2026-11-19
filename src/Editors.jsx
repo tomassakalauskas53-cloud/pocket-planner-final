@@ -11,37 +11,38 @@ export function AmountField({ name = 'amount', label = 'Suma (€)', amount, aut
   )
 }
 
-function Editor({ title, onClose, onSubmit, children }) {
+function Editor({ title, onClose, onSubmit, children, saving, saveError }) {
   return (
     <div className="modal">
-      <form className="modal-card" role="dialog" aria-modal="true" aria-labelledby="editor-title"
-        onKeyDown={(event) => { if (event.key === 'Escape') onClose() }}
+      <form className="modal-card" role="dialog" aria-modal="true" aria-labelledby="editor-title" aria-busy={saving}
+        onKeyDown={(event) => { if (!saving && event.key === 'Escape') onClose() }}
         onSubmit={(event) => {
           event.preventDefault()
-          onSubmit(new FormData(event.currentTarget))
+          if (!saving) onSubmit(new FormData(event.currentTarget))
         }}>
         <div className="modal-head">
           <h2 id="editor-title">{title}</h2>
         </div>
-        {children}
+        <div inert={saving}>{children}</div>
+        {saveError && <p className="notice" role="alert">{saveError}</p>}
         <div className="form-actions">
-          <button type="button" className="btn secondary" onClick={onClose}>Atšaukti</button>
-          <button className="btn">Išsaugoti</button>
+          <button type="button" className="btn secondary" disabled={saving} onClick={onClose}>Atšaukti</button>
+          <button className="btn" disabled={saving}>{saving ? 'Saugoma…' : 'Išsaugoti'}</button>
         </div>
       </form>
     </div>
   )
 }
 
-export function IncomeEditor({ income, onClose, onSave }) {
+export function IncomeEditor({ income, onSave, ...editorProps }) {
   return (
-    <Editor title="Mėnesio pajamos" onClose={onClose} onSubmit={(fields) => onSave(cents(fields.get('amount')))}>
+    <Editor title="Mėnesio pajamos" {...editorProps} onSubmit={(fields) => onSave(cents(fields.get('amount')))}>
       <AmountField label="Pajamos (€)" amount={income} autoFocus />
     </Editor>
   )
 }
 
-export function ExpenseEditor({ kind, item, month, onClose, onSave }) {
+export function ExpenseEditor({ kind, item, month, expenseId, onSave, ...editorProps }) {
   const [error, setError] = useState('')
   const recurring = kind === 'recurring'
   const title = recurring ? 'Pasikartojanti išlaida' : 'Būsima išlaida'
@@ -52,7 +53,7 @@ export function ExpenseEditor({ kind, item, month, onClose, onSave }) {
       setError('Įvesk pavadinimą.')
       return
     }
-    const expense = { id: item?.id || crypto.randomUUID(), name, amount: cents(fields.get('amount')) }
+    const expense = { id: expenseId, name, amount: cents(fields.get('amount')) }
     if (recurring) {
       expense.day = Number(fields.get('day'))
       expense.active = fields.get('active') === 'true'
@@ -65,7 +66,7 @@ export function ExpenseEditor({ kind, item, month, onClose, onSave }) {
   }
 
   return (
-    <Editor title={title} onClose={onClose} onSubmit={save}>
+    <Editor title={title} {...editorProps} onSubmit={save}>
       <div className="form-grid">
         <label className="field">
           <span>Pavadinimas</span>
