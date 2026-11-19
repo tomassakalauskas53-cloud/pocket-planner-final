@@ -10,13 +10,15 @@ Pocket Planner is a budgeting app built as a Codecademy final project. It helps 
 
 ## Current features
 
-- Continue without an account through the sign-in placeholder.
+- Register and sign in with an email address and password using Supabase Auth. The app restores the session after a reload.
 - Switch between months and edit the income for each month.
 - Set euro amounts for essential expenses, investments, entertainment and gifts, and education.
 - Add, edit, or delete recurring and upcoming expenses, and see how they affect the monthly budget.
 - Save budget and expense data in the current browser using local storage.
 
 ## Local setup
+
+Copy `.env.example` to `.env.local` in the project root. Set `VITE_SUPABASE_URL` to your Supabase project URL and `VITE_SUPABASE_PUBLISHABLE_KEY` to your project's publishable key. Enable the Email provider and add the Vite app URL to the project's Auth redirect allow list if email confirmation is enabled.
 
 Install dependencies from the lockfile and start the development server.
 
@@ -33,5 +35,5 @@ npm run build
 
 ## Planned integrations
 
-- **Supabase** for account authentication and storage of account-specific budgets and expenses.
+- **Supabase** for storage of account-specific budgets and expenses.
 - **Zapier** for optional budget and expense automations.
