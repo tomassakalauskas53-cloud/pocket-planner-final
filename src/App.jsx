@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Budget, Expenses, ExpenseList } from './Screens.jsx'
 import { ExpenseEditor, IncomeEditor } from './Editors.jsx'
-import { emptyMonth, loadPlanner, monthKey, monthLabel, shiftMonth, storePlanner } from './planner.js'
-
+import { emptyMonth, monthKey, monthLabel, shiftMonth } from './planner.js'
+import { deleteExpense, loadPlanner, saveBudget, saveExpense } from './plannerData.js'
 import { AuthGate } from './Auth.jsx'
 
 const pages = { plan: 'Mėnesio planas', expenses: 'Išlaidos' }
@@ -10,13 +10,13 @@ const pages = { plan: 'Mėnesio planas', expenses: 'Išlaidos' }
 export default function App() {
   return (
     <AuthGate>
-      {(userId, onSignOut) => <Planner key={userId} onSignOut={onSignOut} />}
+      {(userId, onSignOut) => <Planner key={userId} userId={userId} onSignOut={onSignOut} />}
     </AuthGate>
   )
 }
 
-function Planner({ onSignOut }) {
-  const [planner, setPlanner] = useState(loadPlanner)
+function Planner({ userId, onSignOut }) {
+  const [planner, setPlanner] = useState(null)
   const [screen, setScreen] = useState('plan')
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState(false)
@@ -24,17 +24,27 @@ function Planner({ onSignOut }) {
   const [month, setMonth] = useState(today)
   const [tab, setTab] = useState('recurring')
   const [editor, setEditor] = useState(null)
-  const [storageError, setStorageError] = useState(false)
-  const plan = planner.months[month] || emptyMonth
+  const [loadError, setLoadError] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [saving, setSaving] = useState(false)
+  const [writeError, setWriteError] = useState('')
+  const [editorError, setEditorError] = useState('')
+  const plan = planner?.months[month] || emptyMonth
   const months = [...new Set([
-    ...Object.keys(planner.months),
+    ...Object.keys(planner?.months || {}),
     ...Array.from({ length: 19 }, (_, index) => shiftMonth(today, index - 6)),
     month,
   ])].sort()
 
   useEffect(() => {
-    setStorageError(!storePlanner(planner))
-  }, [planner])
+    const controller = new AbortController()
+    loadPlanner(userId, controller.signal).then((data) => {
+      if (!controller.signal.aborted) setPlanner(data)
+    }).catch(() => {
+      if (!controller.signal.aborted) setLoadError(true)
+    })
+    return () => controller.abort()
+  }, [userId, loadAttempt])
 
   async function signOut() {
     setSigningOut(true)
@@ -47,56 +57,79 @@ function Planner({ onSignOut }) {
     }
   }
 
-  function changeMonth(update) {
-    setPlanner((data) => ({
-      ...data,
-      months: { ...data.months, [month]: update(data.months[month] || emptyMonth) },
-    }))
+  function openEditor(kind, item) {
+    setEditorError('')
+    setEditor({ kind, item, expenseId: kind === 'income' ? undefined : item?.id || crypto.randomUUID() })
   }
 
-  function saveExpense(expense) {
-    const { kind, item } = editor
-    if (kind === 'recurring') {
+  async function write(action, inEditor = false) {
+    const showError = inEditor ? setEditorError : setWriteError
+    setSaving(true)
+    showError('')
+    try {
+      await action()
+    } catch {
+      showError('Nepavyko išsaugoti pakeitimų. Bandyk dar kartą.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function updateBudget(changes, inEditor = false) {
+    return write(async () => {
+      const budget = await saveBudget(userId, month, changes)
       setPlanner((data) => ({
         ...data,
-        recurring: item
-          ? data.recurring.map((entry) => entry.id === item.id ? expense : entry)
-          : [...data.recurring, expense],
+        months: { ...data.months, [month]: { ...(data.months[month] || emptyMonth), ...budget } },
       }))
-    } else {
-      const target = expense.date.slice(0, 7)
-      setPlanner((data) => {
-        const months = { ...data.months }
-        if (item) {
-          months[month] = { ...months[month], future: months[month].future.filter((entry) => entry.id !== item.id) }
-        }
-        const targetPlan = months[target] || emptyMonth
-        months[target] = { ...targetPlan, future: [...targetPlan.future, expense] }
-        return { ...data, months }
-      })
-      setMonth(target)
-    }
-    setEditor(null)
+      if (inEditor) setEditor(null)
+    }, inEditor)
+  }
+
+  function submitExpense(expense) {
+    const { kind, item } = editor
+    return write(async () => {
+      const saved = await saveExpense(userId, kind, expense, Boolean(item))
+      if (kind === 'recurring') {
+        setPlanner((data) => ({
+          ...data,
+          recurring: item
+            ? data.recurring.map((entry) => entry.id === saved.id ? saved : entry)
+            : [...data.recurring, saved],
+        }))
+      } else {
+        const target = saved.date.slice(0, 7)
+        setPlanner((data) => {
+          const months = { ...data.months }
+          if (item) {
+            months[month] = { ...months[month], future: months[month].future.filter((entry) => entry.id !== saved.id) }
+          }
+          const targetPlan = months[target] || emptyMonth
+          months[target] = { ...targetPlan, future: [...targetPlan.future, saved] }
+          return { ...data, months }
+        })
+        setMonth(target)
+      }
+      setEditor(null)
+    }, true)
   }
 
   function removeExpense(kind, item) {
     if (!window.confirm(`Ištrinti išlaidą „${item.name}“?`)) return
-    const keep = (entry) => entry.id !== item.id
-    if (kind === 'recurring') {
-      setPlanner((data) => ({ ...data, recurring: data.recurring.filter(keep) }))
-    } else {
-      changeMonth((data) => ({ ...data, future: data.future.filter(keep) }))
-    }
+    return write(async () => {
+      await deleteExpense(userId, item.id)
+      const keep = (entry) => entry.id !== item.id
+      setPlanner((data) => kind === 'recurring'
+        ? { ...data, recurring: data.recurring.filter(keep) }
+        : { ...data, months: { ...data.months, [month]: { ...plan, future: plan.future.filter(keep) } } })
+    })
   }
 
-  const expenseActions = {
-    onEdit: (kind, item) => setEditor({ kind, item }),
-    onRemove: removeExpense,
-  }
+  const expenseActions = { onEdit: openEditor, onRemove: removeExpense }
 
   return (
     <div className="app">
-      <aside className="sidebar" inert={Boolean(editor)}>
+      <aside className="sidebar" inert={Boolean(editor) || saving}>
         <div className="brand">Pocket Planner</div>
         <nav className="nav" aria-label="Pagrindinė navigacija">
           {Object.entries(pages).map(([key, label]) => (
@@ -110,7 +143,7 @@ function Planner({ onSignOut }) {
           </button>
         </nav>
       </aside>
-      <main className="main" inert={Boolean(editor)}>
+      <main className="main" inert={Boolean(editor) || saving}>
         <header className="top">
           <div>
             <h1>{pages[screen]}</h1>
@@ -127,29 +160,36 @@ function Planner({ onSignOut }) {
               onClick={() => setMonth(shiftMonth(month, 1))}>→</button>
           </div>
         </header>
-        {storageError && <p className="notice" role="status">Naršyklėje nepavyko išsaugoti duomenų.</p>}
+        {saving && !editor && <p>Saugomi pakeitimai…</p>}
+        {writeError && <p className="notice" role="alert">{writeError}</p>}
+        {loadError ? (
+          <section className="card">
+            <p className="notice" role="alert">Nepavyko įkelti plano duomenų.</p>
+            <button className="btn" onClick={() => {
+              setLoadError(false)
+              setLoadAttempt((attempt) => attempt + 1)
+            }}>Bandyti dar kartą</button>
+          </section>
+        ) : !planner && <p role="status">Įkeliami plano duomenys…</p>}
         {signOutError && <p className="notice" role="alert">Nepavyko atsijungti. Bandyk dar kartą.</p>}
-        {screen === 'plan' && (
+        {planner && screen === 'plan' && (
           <Budget key={month} plan={plan} recurring={planner.recurring}
-            onEditIncome={() => setEditor({ kind: 'income' })}
-            onAllocate={(allocations) => changeMonth((data) => ({
-              ...data, allocations,
-            }))}>
+            onEditIncome={() => openEditor('income')}
+            onAllocate={(allocations) => updateBudget({ allocations })}>
             <ExpenseList kind="future" entries={plan.future} heading="Būsimos išlaidos šiame mėnesyje" {...expenseActions} />
           </Budget>
         )}
-        {screen === 'expenses' && (
+        {planner && screen === 'expenses' && (
           <Expenses tab={tab} onTabChange={setTab} future={plan.future} recurring={planner.recurring} {...expenseActions} />
         )}
       </main>
       {editor?.kind === 'income' && (
-        <IncomeEditor income={plan.income} onClose={() => setEditor(null)} onSave={(income) => {
-          changeMonth((data) => ({ ...data, income }))
-          setEditor(null)
-        }} />
+        <IncomeEditor income={plan.income} saving={saving} saveError={editorError}
+          onClose={() => setEditor(null)} onSave={(income) => updateBudget({ income }, true)} />
       )}
       {editor && editor.kind !== 'income' && (
-        <ExpenseEditor {...editor} month={month} onClose={() => setEditor(null)} onSave={saveExpense} />
+        <ExpenseEditor {...editor} month={month} saving={saving} saveError={editorError}
+          onClose={() => setEditor(null)} onSave={submitExpense} />
       )}
     </div>
   )
